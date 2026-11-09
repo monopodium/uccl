@@ -159,14 +159,20 @@ def _run_client(args, ep: "p2p.Endpoint", remote_metadata: bytes) -> List[Tuple]
             else:
                 ok = ep.write(conn_id, mr_id, tensor.data_ptr(), size, fifo_blob)
                 assert ok, "[Client] write error"
+            if args.fence == "each":
+                assert ep.flush_compressed_writes(conn_id, timeout_ms=60_000), "[Client] fence timeout"
 
         write_once()
+        assert ep.flush_compressed_writes(conn_id, timeout_ms=60_000), "[Client] fence timeout"
 
         start = time.perf_counter()
         total = 0
         for _ in range(args.iters):
             write_once()
             total += size
+        if args.fence != "none":
+            # count the receiver's decompression into the destination buffer
+            assert ep.flush_compressed_writes(conn_id, timeout_ms=60_000), "[Client] fence timeout"
 
         elapsed = time.perf_counter() - start
 
@@ -216,6 +222,15 @@ def main():
         ],
     )
     p.add_argument("--iters", type=int, default=128)
+    p.add_argument(
+        "--fence",
+        choices=["none", "end", "each"],
+        default="end",
+        help="when to wait for the receiver's decompression into the destination: "
+        "none = time only until compressed bytes reach the receiver's staging arena (previous behaviour); "
+        "end = once after the timed loop (steady-state throughput incl. decompression); "
+        "each = after every write (per-message latency incl. decompression)",
+    )
     p.add_argument(
         "--async-api",
         action="store_true",
