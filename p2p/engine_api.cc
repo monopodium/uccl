@@ -1338,6 +1338,17 @@ NB_MODULE(p2p, m) {
             return nb::make_tuple(success, is_done);
           },
           "Poll the status of an asynchronous transfer", nb::arg("transfer_id"))
+      .def(
+          "flush_compressed_writes",
+          [](Endpoint& self, uint64_t conn_id, int64_t timeout_ms) {
+            nb::gil_scoped_release release;
+            InsidePythonGuard guard;
+            return self.flush_compressed_writes(conn_id, timeout_ms);
+          },
+          "Block until every compressed write posted on conn_id has been "
+          "decompressed into its destination on the peer. Returns False on "
+          "timeout (timeout_ms < 0 waits forever).",
+          nb::arg("conn_id"), nb::arg("timeout_ms") = -1)
       .def("conn_id_of_rank", &Endpoint::conn_id_of_rank,
            "Get the connection ID for a given peer (or UINT64_MAX if none)",
            nb::arg("rank"))

@@ -666,6 +666,10 @@ bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id,
 
   P2PMhandle* mhandle = new P2PMhandle();
   mhandle->compress_ctx = make_compress_ctx(float_type);
+  // The compression context is prepared for exactly [data, data+size); a
+  // write of any other range from this handle must not use it.
+  mhandle->registered_addr = data;
+  mhandle->registered_len = size;
   if (!uccl_regmr(ep_, const_cast<void*>(data), size, mhandle)) {
     delete mhandle;
     return false;
@@ -2380,6 +2384,22 @@ bool Endpoint::start_passive_accept() {
     passive_accept_ = true;
   }
   return true;
+}
+
+bool Endpoint::flush_compressed_writes(uint64_t conn_id, int64_t timeout_ms) {
+  if constexpr (uccl::device::Backend::staged_network) return true;
+  auto* conn = get_conn(conn_id);
+  if (unlikely(conn == nullptr)) {
+    std::cerr << "[flush_compressed_writes] Error: Invalid conn_id " << conn_id
+              << std::endl;
+    return false;
+  }
+  if (conn->is_local_) return true;  // IPC writes are never compressed
+  SendConnection* send_group =
+      uccl_resolve_send_group(ep_, conn->uccl_conn_id_.peer_id);
+  if (send_group == nullptr) return true;  // non-RDMA transport
+  return send_group->wait_compressed_acks(timeout_ms < 0 ? -1
+                                                         : timeout_ms * 1000);
 }
 
 bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {

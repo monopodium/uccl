@@ -4,6 +4,9 @@ Correctness test for compressed RDMA WRITE (split_only strategy).
 Rank 0 (writer) writes a tensor filled with a per-iteration constant.
 Rank 1 (receiver) verifies the decompressed result after each iteration.
 
+The writer uses Endpoint.flush_compressed_writes() as the completion fence:
+it returns only after the receiver decompressed into dst and ACKed.
+
 Each iteration is strictly serialized via a gloo handshake: writer waits for
 receiver's "verified" signal before sending the next write. This prevents a
 later WriteReqMeta from being processed by the background thread before the
@@ -119,14 +122,16 @@ def main():
                 if done:
                     break
 
-            # poll_async returns when data WCs arrive; WriteReqMeta may still
-            # be in the NIC send queue. Sleep so the NIC has time to send it.
-            time.sleep(0.5)
+            # poll_async returns when the compressed bytes reached the
+            # receiver's staging arena. flush_compressed_writes returns once
+            # the receiver ACKed, i.e. decompression into dst has finished.
+            assert ep.flush_compressed_writes(
+                conn_id, timeout_ms=30_000
+            ), f"flush_compressed_writes timed out iter={i}"
 
-            # Signal receiver that WriteReqMeta has been transmitted, then
-            # wait for receiver to confirm decompression + verification done.
-            # This strict handshake prevents iter N+1 data from arriving at
-            # receiver before iter N is verified.
+            # Signal receiver that dst holds the data, then wait for it to
+            # confirm verification. This strict handshake prevents iter N+1
+            # data from arriving at receiver before iter N is verified.
             gloo_send(i, dst=1)
             result = gloo_recv(src=1)
             if result != 0:
@@ -153,10 +158,9 @@ def main():
         for i in range(args.iters):
             fill_val = float(i + 1)
 
-            # Wait for writer's "data ready" signal, then allow time for the
-            # background thread to process WriteReqMeta and finish decompression.
+            # The writer signals only after flush_compressed_writes, so dst
+            # already holds the decompressed data: no sleep needed.
             gloo_recv(src=0)
-            time.sleep(0.5)
             torch.cuda.synchronize()
 
             if not torch.all(dst == fill_val):

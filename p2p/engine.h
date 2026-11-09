@@ -404,6 +404,14 @@ class Endpoint {
   /* Poll the status of the asynchronous receive. */
   bool poll_async(uint64_t transfer_id, bool* is_done);
 
+  /* Block until every compressed write already posted on `conn_id` has been
+   * decompressed into its destination on the peer (the peer's ACK arrived).
+   * write()/poll_async() only guarantee the compressed bytes reached the
+   * peer's staging arena. No-op (true) for non-RDMA transports or when no
+   * compressed write is pending. Returns false on timeout (timeout_ms < 0
+   * waits forever) or an invalid conn_id. */
+  bool flush_compressed_writes(uint64_t conn_id, int64_t timeout_ms = -1);
+
   int get_sock_fd(uint64_t conn_id) const;
 
   /** Returns conn_id for @rank, or UINT64_MAX if unknown. */

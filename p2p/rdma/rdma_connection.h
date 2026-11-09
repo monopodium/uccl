@@ -136,6 +136,14 @@ class SendConnection : public RDMAConnection {
   // ── Completion ─────────────────────────────────────────────────────────────
   bool check_completion(int64_t wr_id);
 
+  // A compressed write "completes" (check_completion) once its RDMA data has
+  // landed in the peer's decompress arena; the peer decompresses into the
+  // user's destination afterwards and then posts an ACK. This fence drives
+  // the connection until every compressed write posted so far has been
+  // ACKed, i.e. its decompressed bytes are in the destination buffer.
+  // Returns false on timeout (timeout_us < 0 waits forever).
+  bool wait_compressed_acks(int64_t timeout_us);
+
   // ── Polling ────────────────────────────────────────────────────────────────
   void send_routine();
 

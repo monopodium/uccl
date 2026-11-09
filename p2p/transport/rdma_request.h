@@ -14,6 +14,17 @@ struct PooledSendBundle {
       : req(std::shared_ptr<RegMemBlock>(), std::shared_ptr<RemoteMemInfo>()) {}
 };
 
+// The compression context of a handle was prepared for exactly its registered
+// range: compressing any other range would encode the wrong bytes. A write of
+// a sub-range of a regular handle therefore goes out uncompressed.
+static inline CompressCtx compress_ctx_for_send(P2PMhandle const* local_mh,
+                                                void const* src, size_t size) {
+  if (local_mh->compress_ctx && (src != local_mh->registered_addr ||
+                                 size != local_mh->registered_len))
+    return nullptr;
+  return local_mh->compress_ctx;
+}
+
 // A compress_only handle has no user MR: it may only be used as the exact
 // registered source of a write.
 static inline bool compress_only_send_rejected(P2PMhandle const* local_mh,
@@ -55,7 +66,7 @@ static inline int set_request(std::shared_ptr<RDMAEndpoint> const& obj,
       std::shared_ptr<RegMemBlock>(bundle, &bundle->local_mem_obj);
   bundle->req.remote_mem =
       std::shared_ptr<RemoteMemInfo>(bundle, &bundle->remote_mem_obj);
-  bundle->req.compress_ctx = local_mh->compress_ctx;
+  bundle->req.compress_ctx = compress_ctx_for_send(local_mh, src, size);
   bundle->req.compress_only = local_mh->compress_only;
   bundle->req.to_peer_id = conn->uccl_conn_id_.peer_id;
   bundle->req.send_type =
@@ -96,7 +107,7 @@ static inline int set_request_on_group(SendConnection* send_group, Conn* conn,
       std::shared_ptr<RegMemBlock>(bundle, &bundle->local_mem_obj);
   bundle->req.remote_mem =
       std::shared_ptr<RemoteMemInfo>(bundle, &bundle->remote_mem_obj);
-  bundle->req.compress_ctx = local_mh->compress_ctx;
+  bundle->req.compress_ctx = compress_ctx_for_send(local_mh, src, size);
   bundle->req.compress_only = local_mh->compress_only;
   bundle->req.to_peer_id = conn->uccl_conn_id_.peer_id;
   bundle->req.send_type =

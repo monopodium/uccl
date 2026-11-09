@@ -2,6 +2,8 @@
 #include "util/debug.h"
 #include "util/util.h"
 #include <cerrno>
+#include <chrono>
+#include <thread>
 
 static constexpr uint32_t compressed_write_slot(int64_t wr_id) {
   return static_cast<uint64_t>(wr_id) % kAckRingDepth;
@@ -883,6 +885,25 @@ void SendConnection::poll_data_channels() {
     }
   }
   poll_ack_ring();
+}
+
+bool SendConnection::wait_compressed_acks(int64_t timeout_us) {
+  auto const start = std::chrono::steady_clock::now();
+  while (pending_compressed_count_.load(std::memory_order_acquire) != 0) {
+    // send_routine() pushes WriteReqMeta for data-complete writes and drains
+    // the ACK ring; it is safe to call concurrently with the proxy thread.
+    send_routine();
+    if (timeout_us >= 0 &&
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - start)
+                .count() > timeout_us) {
+      UCCL_LOG(WARN) << "wait_compressed_acks timed out with "
+                     << pending_compressed_count_.load() << " pending";
+      return false;
+    }
+    std::this_thread::yield();
+  }
+  return true;
 }
 
 void SendConnection::poll_ack_ring() {
