@@ -80,6 +80,21 @@ def _recv_obj(src: int):
     return json.loads(bytes(payload.tolist()).decode())
 
 
+_SIZE_BUCKETS = [(0, 1 << 20, "<1MB"), (1 << 20, 16 << 20, "1-16MB"), (16 << 20, 64 << 20, "16-64MB"),
+                 (64 << 20, 256 << 20, "64-256MB"), (256 << 20, 1 << 62, ">=256MB")]
+
+
+def _size_distribution(tensors: list[torch.Tensor]) -> dict:
+    """Tensor count and byte share per size bucket: where the bytes of a model's weight sync are."""
+    total = sum(t.nbytes for t in tensors)
+    out = {}
+    for lo, hi, label in _SIZE_BUCKETS:
+        sel = [t for t in tensors if lo <= t.nbytes < hi]
+        out[label] = dict(count=len(sel), byte_share=sum(t.nbytes for t in sel) / total,
+                          compressed=bool(sel) and all(_compresses(t) for t in sel))
+    return out
+
+
 def _checksum(tensors: list[torch.Tensor]) -> int:
     # order-sensitive, bit-exact: sum of int64 views weighted by position
     acc = torch.zeros((), dtype=torch.int64, device="cuda")
@@ -141,14 +156,22 @@ def _run_sender(args, ep: "p2p.Endpoint", conn_id: int, named: list) -> None:
             times.append(elapsed)
     times.sort()
     median = times[len(times) // 2]
+    mean = sum(times) / len(times)
+    std = (sum((t - mean) ** 2 for t in times) / max(1, len(times) - 1)) ** 0.5
     result = dict(
         model=os.path.basename(os.path.normpath(args.model)),
         strategy=_STRATEGY,
         num_tensors=len(named),
         total_GB=total_bytes / 1e9,
         compressed_path_fraction=compressed_bytes / total_bytes,
+        iters=len(times),
+        warmup=args.warmup,
         sync_s_median=median,
+        sync_s_mean=mean,
+        sync_s_std=std,
         sync_s_min=times[0],
+        sync_s_max=times[-1],
+        size_distribution=_size_distribution([t for _, t in named]),
         effective_GBps=total_bytes / 1e9 / median,
         bit_exact=True,
     )
@@ -161,7 +184,7 @@ def _run_sender(args, ep: "p2p.Endpoint", conn_id: int, named: list) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True, help="HF checkpoint dir with *.safetensors")
-    ap.add_argument("--iters", type=int, default=5)
+    ap.add_argument("--iters", type=int, default=10)
     ap.add_argument("--warmup", type=int, default=1)
     ap.add_argument("--max-tensors", type=int, default=None, help="debug: only the first N tensors")
     ap.add_argument("--out", default=None, help="append the JSON result to this file (rank 0)")
