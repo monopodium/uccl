@@ -1,5 +1,5 @@
 """Single-GPU codec comparison on real LLM weights: LZip-P2P (DietGPU float codec) vs. the lossless
-schemes of ZipNN, NeuZip, DFloat11 and ZipCCL, under one setting: the same BF16 tensors, the same GPU.
+schemes of ZipNN, NeuZip and DFloat11, under one setting: the same BF16 tensors, the same GPU.
 
 For each codec it reports the compression ratio (compressed / original bytes) and, where the codec has a
 runnable implementation, compression and decompression throughput. Baselines are measured with their own
@@ -12,8 +12,6 @@ code where it exists and is runnable on a tensor; otherwise the column is comput
   zipnn               measured                 CPU, measured       CPU, measured       pip zipnn
   dfloat11            exact Huffman size of    offline CPU (paper) GPU, not measured   computed; DF11 has no
                       the exponent stream                                              per-tensor API
-  zipccl              exact size of its fixed  -                   -                   computed; no public code
-                      3-bit top-7 exponent code
 
 It also prints a modeled per-tensor transfer time for "encode -> send -> decode" (no overlap, as none of the
 baselines overlaps codec work with the network) at --link-gbps, next to the uncompressed transfer time.
@@ -184,15 +182,6 @@ def ratio_dfloat11(t: torch.Tensor, hist: Counter) -> dict:
     return dict(ratio=bits / 8 / t.nbytes)
 
 
-def ratio_zipccl(t: torch.Tensor, hist: Counter) -> dict:
-    # 3-bit code for the 7 most frequent exponents (an oracle top-7, i.e. an upper bound on ZipCCL's
-    # analytic sigma-based choice), the 8th code word escapes to a raw 8-bit exponent.
-    top7 = sum(c for _, c in hist.most_common(7))
-    escapes = t.numel() - top7
-    bits = 8 * t.numel() + 3 * t.numel() + 8 * escapes
-    return dict(ratio=bits / 8 / t.nbytes)
-
-
 # ----------------------------------------------------------------------------- driver
 
 
@@ -210,7 +199,7 @@ def main() -> None:
     ap.add_argument("--iters", type=int, default=10)
     ap.add_argument("--zipnn-threads", type=int, default=16)
     ap.add_argument("--link-gbps", type=float, default=400.0, help="per-GPU NIC line rate for the modeled column")
-    ap.add_argument("--codecs", default="lzip,neuzip,zipnn,dfloat11,zipccl")
+    ap.add_argument("--codecs", default="lzip,neuzip,zipnn,dfloat11")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -233,8 +222,6 @@ def main() -> None:
                     rows[codec] = bench_zipnn(t, max(1, args.iters // 5), args.zipnn_threads)
                 elif codec == "dfloat11":
                     rows[codec] = ratio_dfloat11(t, hist)
-                elif codec == "zipccl":
-                    rows[codec] = ratio_zipccl(t, hist)
             except ImportError as e:
                 print(f"[warn] {codec} unavailable ({e}); skipping")
                 codecs = [c for c in codecs if c != codec]
